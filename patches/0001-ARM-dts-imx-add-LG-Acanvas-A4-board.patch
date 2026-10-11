@@ -1,0 +1,375 @@
+From: fastline <1082hj@gmail.com>
+Subject: [PATCH] ARM: dts: imx: add LG Acanvas A4 (i.MX6 Solo) board
+
+Based on imx6qdl-sabresd.dtsi; the vendor 3.10 DTB is a SABRE-SD derivative.
+Applies on top of Linux v6.18.54 (regenerated 2026-10-11 from the current DTS).
+---
+diff -ruN a/arch/arm/boot/dts/nxp/imx/imx6dl-lge-a4.dts b/arch/arm/boot/dts/nxp/imx/imx6dl-lge-a4.dts
+--- a/arch/arm/boot/dts/nxp/imx/imx6dl-lge-a4.dts
++++ b/arch/arm/boot/dts/nxp/imx/imx6dl-lge-a4.dts
+@@ -0,0 +1,354 @@
++// SPDX-License-Identifier: (GPL-2.0-only OR MIT)
++//
++// LG Electronics "Acanvas A4" board (i.MX6 Solo, 1 GiB, 8 GB eMMC,
++// 23" 1920x1080 dual-channel LVDS panel LG LM230WF3, Intel 3160 PCIe Wi-Fi).
++// The vendor 3.10 device tree is a lightly modified i.MX6DL SABRE-SD tree,
++// so this file reuses imx6qdl-sabresd.dtsi and only overrides the differences.
++
++/dts-v1/;
++
++#include "imx6dl.dtsi"
++#include "imx6qdl-sabresd.dtsi"
++
++/ {
++	model = "LG Electronics Acanvas A4 (i.MX6 Solo)";
++	compatible = "lge,imx6dl-a4", "fsl,imx6dl-sabresd", "fsl,imx6dl";
++
++	/* SABRE-SD parts that do not exist on the A4 */
++	sound {
++		status = "disabled";
++	};
++
++	regulator-audio {
++		status = "disabled";
++	};
++
++	leds {
++		status = "disabled";
++	};
++
++	gpio-keys {
++		key-volume-up {
++			status = "disabled";
++		};
++
++		key-volume-down {
++			status = "disabled";
++		};
++	};
++
++	/*
++	 * Replace the SABRE-SD Hannstar XGA panel with the A4 panel.
++	 * Timings copied from the vendor DTB (lvds-channel display-timings):
++	 * 143.616 MHz, 1920x1080, hbp/hfp 96, hsync 64, vbp/vfp 8, vsync 4.
++	 * Vendor tree: "spwg", 24 bit, split (dual-channel) mode.
++	 */
++	panel {
++		compatible = "panel-lvds";
++		label = "LG LM230WF3 23in FHD";
++		width-mm = <509>;
++		height-mm = <286>;
++		data-mapping = "vesa-24";
++		backlight = <&backlight_lvds>;
++		/* frame hangs in portrait: panel content rotated 90 deg counter-clockwise */
++		rotation = <90>;
++
++		panel-timing {
++			/* 2176 x 1100 x 60.00 Hz = 143.616 MHz, the vendor DTB value (143.5 MHz gave 59.95 Hz) */
++			clock-frequency = <143616000>;
++			hactive = <1920>;
++			vactive = <1080>;
++			hback-porch = <96>;
++			hfront-porch = <96>;
++			hsync-len = <64>;
++			vback-porch = <8>;
++			vfront-porch = <8>;
++			vsync-len = <4>;
++		};
++
++		port {
++			panel_in: endpoint {
++				remote-endpoint = <&lvds0_out_a4>;
++			};
++		};
++	};
++};
++
++/* Backlight as the vendor DTB: pwm1 @ 5 ms, 256 brightness steps (0-255), full at boot. The SABRE-SD table has only
++ * 8 steps; interpolating 255 steps between 0 and 255 gives the identity table 0..255 (pwm_bl num_levels = 1*255+1). */
++&backlight_lvds {
++	brightness-levels = <0 255>;
++	num-interpolated-steps = <255>;
++	default-brightness-level = <255>;
++};
++
++/* The physical power button is wired to gpio-keys only (EIM_D29); the SNVS power-key input is not connected on the
++ * A4, and the vendor DTB has no snvs-powerkey node. Disabling it removes the empty second KEY_POWER evdev device. */
++&snvs_pwrkey {
++	status = "disabled";
++};
++
++/* 1080p dual-channel LVDS needs the video PLL, not PLL3 (480 MHz) */
++&clks {
++	assigned-clocks = <&clks IMX6QDL_CLK_LDB_DI0_SEL>,
++			  <&clks IMX6QDL_CLK_LDB_DI1_SEL>;
++	assigned-clock-parents = <&clks IMX6QDL_CLK_PLL5_VIDEO_DIV>,
++				 <&clks IMX6QDL_CLK_PLL5_VIDEO_DIV>;
++};
++
++&ldb {
++	fsl,dual-channel;
++	status = "okay";
++
++	lvds-channel@0 {
++		fsl,data-mapping = "spwg";
++		fsl,data-width = <24>;
++		status = "okay";
++
++		port@4 {
++			reg = <4>;
++
++			lvds0_out_a4: endpoint {
++				remote-endpoint = <&panel_in>;
++			};
++		};
++	};
++
++	/* SABRE-SD drives its panel from channel 1; the A4 uses channel 0 + split mode */
++	lvds-channel@1 {
++		status = "disabled";
++		/delete-node/ port@4;
++	};
++};
++
++/*
++ * On-board Ethernet exactly as the vendor DTB has it: RGMII on the stock pad group, no PHY node (the PHY sits on the
++ * optional flex-cable port module and is found by MDIO scan). Without the module the controller registers but the
++ * open fails with "no PHY found" — same as the vendor kernel's "Phy not found".
++ */
++&fec {
++	pinctrl-names = "default";
++	pinctrl-0 = <&pinctrl_enet_a4>;
++	phy-mode = "rgmii";
++	/delete-property/ phy-handle;
++	/delete-property/ fsl,magic-packet;
++	status = "okay";
++	/delete-node/ mdio;
++};
++
++/* Sensor rail (EIM_EB3 -> GPIO2_31) as the vendor DTB: on at boot with its 500 us start-up delay, so the ambient light
++ * sensor (isl29023 @0x44), accelerometer (mma8451 @0x1c) and magnetometer (mag3110 @0x0e) are powered when probed. */
++&reg_sensors {
++	regulator-always-on;
++	regulator-boot-on;
++	startup-delay-us = <500>;
++};
++
++&iomuxc {
++	/* vendor enetgrp-1: every pad 0x1b0b0 (sabresd uses 0x1b030 on the RGMII data pads) */
++	pinctrl_enet_a4: enetgrp-a4 {
++		fsl,pins = <
++			MX6QDL_PAD_ENET_MDIO__ENET_MDIO		0x1b0b0
++			MX6QDL_PAD_ENET_MDC__ENET_MDC		0x1b0b0
++			MX6QDL_PAD_RGMII_TXC__RGMII_TXC		0x1b0b0
++			MX6QDL_PAD_RGMII_TD0__RGMII_TD0		0x1b0b0
++			MX6QDL_PAD_RGMII_TD1__RGMII_TD1		0x1b0b0
++			MX6QDL_PAD_RGMII_TD2__RGMII_TD2		0x1b0b0
++			MX6QDL_PAD_RGMII_TD3__RGMII_TD3		0x1b0b0
++			MX6QDL_PAD_RGMII_TX_CTL__RGMII_TX_CTL	0x1b0b0
++			MX6QDL_PAD_ENET_REF_CLK__ENET_TX_CLK	0x1b0b0
++			MX6QDL_PAD_RGMII_RXC__RGMII_RXC		0x1b0b0
++			MX6QDL_PAD_RGMII_RD0__RGMII_RD0		0x1b0b0
++			MX6QDL_PAD_RGMII_RD1__RGMII_RD1		0x1b0b0
++			MX6QDL_PAD_RGMII_RD2__RGMII_RD2		0x1b0b0
++			MX6QDL_PAD_RGMII_RD3__RGMII_RD3		0x1b0b0
++			MX6QDL_PAD_RGMII_RX_CTL__RGMII_RX_CTL	0x1b0b0
++			MX6QDL_PAD_GPIO_16__ENET_REF_CLK	0x4001b0a8
++		>;
++	};
++};
++
++/* Not brought up on first boot; the vendor recovery DTB keeps HDMI disabled too */
++&hdmi {
++	status = "disabled";
++};
++
++&mipi_csi {
++	status = "disabled";
++};
++
++&audmux {
++	status = "disabled";
++};
++
++&ssi2 {
++	status = "disabled";
++};
++
++&i2c1 {
++	wm8962@1a {
++		status = "disabled";
++	};
++};
++
++&i2c2 {
++	touchscreen@4 {
++		status = "disabled";
++	};
++
++	camera@3c {
++		status = "disabled";
++	};
++};
++
++&i2c3 {
++	egalax_ts@4 {
++		status = "disabled";
++	};
++
++	/* Smart battery pack (BATTERY connector), from the vendor DTB */
++	battery@b {
++		compatible = "ti,bq40z50", "sbs,sbs-battery";
++		reg = <0x0b>;
++		sbs,i2c-retry-count = <10>;
++	};
++};
++
++/*
++ * GPIO line names from the vendor DTB and board photos. The kernel does not
++ * drive the motor/charger lines; a user-space daemon can use them via libgpiod
++ * (gpiochip0 = gpio1 ... gpiochip6 = gpio7).
++ *   charger (MAX8903, no CEN line so the mainline driver is not used):
++ *     DOK = gpio2 24 (DC-in OK, active low), UOK = gpio1 27 (USB-in OK),
++ *     CHG = gpio3 23 (charging, active low), FLT = gpio5 2 (fault, active low)
++ *   motor (charging puck lift), per the stock a4-powerd "rev3 motor board" note:
++ *     gpio1 0 = MOTOR_EN, gpio1 4 = MOTOR_UP, gpio1 5 = MOTOR_DOWN, gpio1 8 = MOTOR_OK,
++ *     gpio1 9 = +12V_DETECT; per the vendor A4OS 177 a4-powerd:
++ *     gpio4 10 = reel UP limit, gpio4 15 = reel DOWN limit (both read 0 when reached),
++ *     and 177 used the charger CHG line (gpio3 23) as its "charger present" input
++ */
++&gpio1 {
++	gpio-line-names =
++		"motor_ctl_gpio1_0", "", "gpio_2_hog", "", "motor_ctl_gpio1_4",
++		"motor_ctl_gpio1_5", "", "", "motor_ctl_gpio1_8", "gpio_9_hog",
++		"", "", "", "", "", "", "", "", "accel_int", "",
++		"", "", "", "", "", "", "", "charger_uok", "", "usb_h1_vbus_en",
++		"", "";
++};
++
++&gpio2 {
++	gpio-line-names =
++		"sd3_cd", "sd3_wp", "sd2_cd", "sd2_wp", "", "", "", "", "", "",
++		"", "", "", "", "", "", "", "", "eim_a20_hog", "",
++		"eim_a18_hog", "eim_a17_hog", "", "", "charger_dok", "eim_oe_hog", "", "", "", "",
++		"", "sensor_supply_en";
++};
++
++&gpio3 {
++	gpio-line-names =
++		"", "", "", "", "", "", "", "", "eim_da8_hog", "light_int",
++		"", "", "", "", "", "", "mag_int", "eim_d17_hog", "", "pcie_pwr_en",
++		"eim_d20_hog", "", "usb_otg_vbus_en", "charger_chg", "", "", "eim_d26_hog", "", "eim_d28_pullup_in", "power_key",
++		"", "";
++};
++
++&gpio4 {
++	gpio-line-names =
++		"", "", "", "", "", "", "", "", "", "spi_flash_cs",
++		"motor_ctl_gpio4_10", "", "", "", "", "motor_ctl_gpio4_15", "", "", "", "",
++		"", "", "", "", "", "", "", "", "", "",
++		"", "";
++};
++
++&gpio5 {
++	gpio-line-names =
++		"", "", "charger_flt", "", "", "", "", "", "", "",
++		"", "", "", "", "", "", "", "", "", "",
++		"", "", "", "", "", "", "", "", "", "",
++		"", "";
++};
++
++/* Vendor tree: SD2/SD3 are 4-bit, 3.3 V only; all three hosts keep their power in suspend (vendor DTB) */
++&usdhc2 {
++	bus-width = <4>;
++	no-1-8-v;
++	keep-power-in-suspend;
++};
++
++&usdhc3 {
++	bus-width = <4>;
++	no-1-8-v;
++	keep-power-in-suspend;
++};
++
++&usdhc4 {
++	keep-power-in-suspend;
++};
++
++&pinctrl_gpio_keys {
++	fsl,pins = <
++		MX6QDL_PAD_EIM_D29__GPIO3_IO29		0x1b0b0
++	>;
++};
++
++/*
++ * GPIO hog as the vendor 3.10 DTB muxes it (hoggrp-1 + hoggrp-2 + motor_ctl),
++ * minus the pins that imx6qdl-sabresd.dtsi already muxes in per-device groups
++ * (EIM_EB3 sensors regulator, GPIO_1 WDOG2_B, EIM_D29 power key, SD1_CMD /
++ * EIM_DA9 / EIM_D16 sensor interrupts). 0x80000000 = leave the pad control
++ * register untouched, i.e. keep whatever the boot ROM/U-Boot configured.
++ */
++&pinctrl_hog {
++	fsl,pins = <
++		MX6QDL_PAD_NANDF_D0__GPIO2_IO00		0x80000000
++		MX6QDL_PAD_NANDF_D1__GPIO2_IO01		0x80000000
++		MX6QDL_PAD_NANDF_D2__GPIO2_IO02		0x80000000
++		MX6QDL_PAD_NANDF_D3__GPIO2_IO03		0x80000000
++		MX6QDL_PAD_NANDF_ALE__GPIO6_IO08	0x80000000
++		MX6QDL_PAD_NANDF_CLE__GPIO6_IO07	0x80000000
++		MX6QDL_PAD_NANDF_CS2__GPIO6_IO15	0x80000000
++		MX6QDL_PAD_NANDF_CS3__GPIO6_IO16	0x80000000
++		MX6QDL_PAD_EIM_D26__GPIO3_IO26		0x80000000
++		MX6QDL_PAD_EIM_CS1__GPIO2_IO24		0x80000000
++		MX6QDL_PAD_ENET_RXD0__GPIO1_IO27	0x80000000
++		MX6QDL_PAD_EIM_A25__GPIO5_IO02		0x80000000
++		MX6QDL_PAD_EIM_D23__GPIO3_IO23		0x80000000
++		MX6QDL_PAD_ENET_TXD1__GPIO1_IO29	0x80000000
++		MX6QDL_PAD_EIM_D22__GPIO3_IO22		0x80000000
++		MX6QDL_PAD_NANDF_CS0__GPIO6_IO11	0x80000000
++		MX6QDL_PAD_NANDF_CS1__GPIO6_IO14	0x80000000
++		/*
++		 * Motor UP/DOWN request lines (active low, see a4-puckd). 100k pull-up + keeper so the lines read
++		 * "inactive" whenever nothing drives them: at a daemon restart and during shutdown (after a4-puckd is
++		 * killed, before the PMIC cuts power) the floating lines made the reel wind or unwind on its own
++		 * (2026-10-07 unwind at restart, 2026-10-10 full wind during power-off). 0x1b0b0 = HYS, PUS 100k up,
++		 * PUE, PKE, 40 ohm, slow slew (same value the SABRE-SD uses on these pads).
++		 */
++		MX6QDL_PAD_GPIO_4__GPIO1_IO04		0x1b0b0
++		MX6QDL_PAD_GPIO_5__GPIO1_IO05		0x1b0b0
++		MX6QDL_PAD_SD3_RST__GPIO7_IO08		0x80000000
++		MX6QDL_PAD_GPIO_9__GPIO1_IO09		0x80000000
++		MX6QDL_PAD_GPIO_2__GPIO1_IO02		0x80000000
++		/* hoggrp-2 */
++		MX6QDL_PAD_EIM_A17__GPIO2_IO21		0x80000000
++		MX6QDL_PAD_EIM_D17__GPIO3_IO17		0x80000000
++		MX6QDL_PAD_EIM_D20__GPIO3_IO20		0x80000000
++		MX6QDL_PAD_EIM_A18__GPIO2_IO20		0x80000000
++		MX6QDL_PAD_EIM_OE__GPIO2_IO25		0x80000000
++		MX6QDL_PAD_EIM_A20__GPIO2_IO18		0x80000000
++		MX6QDL_PAD_EIM_DA8__GPIO3_IO08		0x80000000
++		MX6QDL_PAD_EIM_D28__GPIO3_IO28		0x170b0
++		/* motor_ctl */
++		MX6QDL_PAD_KEY_COL2__GPIO4_IO10		0x80000000
++		MX6QDL_PAD_KEY_ROW4__GPIO4_IO15		0x80000000
++		MX6QDL_PAD_GPIO_0__GPIO1_IO00		0x80000000
++		MX6QDL_PAD_GPIO_8__GPIO1_IO08		0x80000000
++	>;
++};
++
++/*
++ * Power button: the physical button reaches the kernel through gpio-keys only (2026-10-07 evdev probe: snvs-powerkey
++ * never reports it), so the SNVS 5 s hard power-off does not apply to it. `power-off-time-sec` in &snvs_pwrkey was tried
++ * (kernel 22:37 build) and LPCR BTN_PRESS_TIME stayed at 5 s on this i.MX6DL — the field is not writable here — so it is
++ * not set. The button policy lives in user space (the hotkey daemon of the Debian userland).
++ */
+diff -ruN a/arch/arm/boot/dts/nxp/imx/Makefile b/arch/arm/boot/dts/nxp/imx/Makefile
+--- a/arch/arm/boot/dts/nxp/imx/Makefile
++++ b/arch/arm/boot/dts/nxp/imx/Makefile
+@@ -127,6 +127,7 @@
+ 	imx6dl-sabreauto.dtb \
+ 	imx6dl-sabrelite.dtb \
+ 	imx6dl-sabresd.dtb \
++	imx6dl-lge-a4.dtb \
+ 	imx6dl-savageboard.dtb \
+ 	imx6dl-sielaff.dtb \
+ 	imx6dl-skov-revc-lt2.dtb \
